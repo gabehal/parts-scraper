@@ -437,106 +437,6 @@ class AutoPartsDetector:
         return make.lower() not in invalid_terms and len(make) > 1
     
     
-    def search_partsgeek(self, part_number: str) -> Optional[List[str]]:
-        """Search PartsGeek as an alternative source."""
-        try:
-            search_url = "https://www.partsgeek.com/catalog/search.php"
-            params = {'q': part_number}
-            
-            time.sleep(1.5)
-            response = self.session.get(search_url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                makes = set()
-                
-                # Look for vehicle compatibility in product listings
-                product_blocks = soup.find_all(['div', 'li'], class_=re.compile(r'product|item|result', re.I))
-                
-                for block in product_blocks:
-                    text = block.get_text().upper()
-                    # Look for year-make patterns
-                    year_make_matches = re.findall(r'(19|20)\d{2}[-\s]+([A-Z][A-Z]+)', text)
-                    for _, make in year_make_matches:
-                        if make in ['FORD', 'CHEVROLET', 'CHEVY', 'DODGE', 'TOYOTA', 'HONDA', 'NISSAN']:
-                            normalized_make = 'Chevrolet' if make == 'CHEVY' else make.title()
-                            makes.add(normalized_make)
-                
-                if makes:
-                    return sorted(list(makes))
-                
-                return None
-            else:
-                logger.warning(f"PartsGeek HTTP {response.status_code} for part {part_number}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error searching PartsGeek for {part_number}: {e}")
-            return None
-
-    def search_advance_auto(self, part_number: str) -> Optional[List[str]]:
-        """Search Advance Auto Parts as backup."""
-        try:
-            search_url = f"https://shop.advanceautoparts.com/web/SearchResults"
-            params = {'searchTerm': part_number}
-            
-            time.sleep(1.5)  # Slightly longer delay for backup source
-            response = self.session.get(search_url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                makes = set()
-                
-                # Check for no results
-                if soup.find(text=re.compile(r'(no results|not found|no items)', re.I)):
-                    logger.info(f"No results found on Advance Auto for part {part_number}")
-                    return None
-                
-                # Method 1: Look for specific vehicle finder URLs
-                vehicle_links = soup.find_all('a', href=re.compile(r'/find/[0-9]{4}-[a-z]+-'))
-                for link in vehicle_links:
-                    href = link.get('href', '')
-                    # Pattern: /find/2008-mazda-3-parts
-                    match = re.search(r'/find/[0-9]{4}-([a-z]+)-', href)
-                    if match:
-                        make = match.group(1).replace('-', ' ').title()
-                        makes.add(make)
-                
-                # Method 2: Look for product titles with year-make patterns
-                result_text = soup.get_text()
-                
-                # Search for patterns like "Fits 2008-2012 Honda" or "For 2010 Toyota"
-                fit_patterns = re.findall(r'(?:fits|for|compatible)\s+(?:[0-9]{4}[-\s]*[0-9]*\s+)?([A-Z][a-z]+)', result_text, re.I)
-                for make in fit_patterns:
-                    if (make.upper() in ['FORD', 'CHEVROLET', 'CHEVY', 'DODGE', 'TOYOTA', 'HONDA', 'NISSAN',
-                                       'BMW', 'MERCEDES', 'AUDI', 'VOLKSWAGEN', 'SUBARU', 'MAZDA',
-                                       'HYUNDAI', 'KIA', 'JEEP', 'CHRYSLER', 'BUICK', 'CADILLAC']):
-                        normalized_make = 'Chevrolet' if make.upper() == 'CHEVY' else make.title()
-                        makes.add(normalized_make)
-                
-                # Method 3: Look for year-make-model patterns
-                ymm_patterns = re.findall(r'\b(19|20)\d{2}\s+([A-Z][a-z]+)(?:\s+[A-Z][a-z]+)?', result_text)
-                for _, make in ymm_patterns:
-                    if (make.upper() in ['FORD', 'CHEVROLET', 'DODGE', 'TOYOTA', 'HONDA', 'NISSAN',
-                                       'BMW', 'MERCEDES', 'AUDI', 'VOLKSWAGEN', 'SUBARU', 'MAZDA',
-                                       'HYUNDAI', 'KIA', 'JEEP', 'CHRYSLER']):
-                        makes.add(make.title())
-                
-                # Filter and return results
-                if makes:
-                    filtered_makes = {make for make in makes 
-                                    if make.lower() not in ['part', 'parts', 'auto', 'car', 'vehicle', 'search']}
-                    if filtered_makes:
-                        return sorted(list(filtered_makes))
-                
-                return None
-            else:
-                logger.warning(f"Advance Auto HTTP {response.status_code} for part {part_number}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error searching Advance Auto for {part_number}: {e}")
-            return None
     
     def search_google_fallback(self, part_number: str) -> Optional[List[str]]:
         """Use web search as fallback to find vehicle makes from search results."""
@@ -772,21 +672,9 @@ class AutoPartsDetector:
             makes = self.search_rockauto(part_number, part['description'], item_num)
             source = 'RockAuto'
             
-            # If RockAuto fails, try PartsGeek
+            # If RockAuto fails, try Google search pattern matching as immediate fallback
             if not makes:
-                logger.info(f"RockAuto failed for {part_number}, trying PartsGeek...")
-                makes = self.search_partsgeek(part_number)
-                source = 'PartsGeek'
-            
-            # If PartsGeek fails, try Advance Auto
-            if not makes:
-                logger.info(f"PartsGeek failed for {part_number}, trying Advance Auto...")
-                makes = self.search_advance_auto(part_number)
-                source = 'AdvanceAuto'
-            
-            # If all direct searches fail, try Google search as final fallback
-            if not makes:
-                logger.info(f"All direct searches failed for {part_number}, trying Google search...")
+                logger.info(f"RockAuto failed for {part_number}, trying Google search pattern matching...")
                 makes = self.search_google_fallback(part_number)
                 source = 'Google'
             
