@@ -1,0 +1,19 @@
+
+# Debug files
+debug_*.html
+*.csv
+__pycache__/
+.DS_Store
+
+# Virtual environment
+venv/
+.venv/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
