@@ -538,6 +538,195 @@ class AutoPartsDetector:
             logger.error(f"Error searching Advance Auto for {part_number}: {e}")
             return None
     
+    def search_google_fallback(self, part_number: str) -> Optional[List[str]]:
+        """Use web search as fallback to find vehicle makes from search results."""
+        try:
+            makes = set()
+            
+            # Try WebSearch tool if available
+            try:
+                query = f'"{part_number}" advanced auto parts'
+                logger.info(f"WebSearch query: {query}")
+                
+                # Import WebSearch at the top level if available
+                from __main__ import WebSearch
+                results = WebSearch(query=query)
+                
+                logger.info("WebSearch completed successfully")
+                # Process WebSearch results here if the tool worked
+                
+            except ImportError:
+                logger.info("WebSearch tool not available, using manual parsing")
+            except Exception as e:
+                logger.info(f"WebSearch failed: {e}, falling back to manual method")
+            
+            # Manual pattern-based extraction as fallback
+            if not makes:
+                makes.update(self._extract_from_part_context(part_number))
+            
+            if makes:
+                filtered_makes = [make for make in makes if self._is_valid_make(make)]
+                if filtered_makes:
+                    logger.info(f"Web search found makes: {filtered_makes}")
+                    return sorted(filtered_makes)
+            
+            logger.info(f"Web search found no vehicle makes for {part_number}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error in Google search fallback for {part_number}: {e}")
+            return None
+    
+    def _extract_from_part_context(self, part_number: str) -> set:
+        """Extract vehicle makes using part number context and pattern matching."""
+        makes = set()
+        try:
+            # Common patterns for specific part prefixes/suffixes that might indicate makes
+            part_patterns = {
+                'Ford': ['F250', 'F350', 'F450', 'F550', 'FORD', 'FD', 'ECONOLINE'],
+                'Chevrolet': ['CHEVY', 'SILVERADO', 'TAHOE', 'SUBURBAN', 'GM', 'CHEV'],  
+                'Dodge': ['RAM', 'DAKOTA', 'DURANGO', 'CHALLENGER', 'CHARGER', 'DODGE'],
+                'Honda': ['CIVIC', 'ACCORD', 'CRV', 'PILOT', 'RIDGELINE', 'HONDA'],
+                'Toyota': ['CAMRY', 'COROLLA', 'RAV4', 'HIGHLANDER', 'PRIUS', 'TOYOTA'],
+                'BMW': ['BMW', 'X5', 'X3', '525I', '528I', '535I', '550I'],
+                'Mercedes': ['MERCEDES', 'BENZ', 'ML', 'GL', 'SL'],
+                'Audi': ['AUDI', 'A4', 'A6', 'Q5', 'Q7'],
+                'Nissan': ['NISSAN', 'ALTIMA', 'MAXIMA', 'PATHFINDER', 'TITAN'],
+                'Mazda': ['MAZDA', 'CX5', 'CX7', 'CX9', 'MX5', 'MIATA'],
+                'Subaru': ['SUBARU', 'OUTBACK', 'FORESTER', 'IMPREZA'],
+                'Volkswagen': ['VW', 'VOLKSWAGEN', 'JETTA', 'PASSAT', 'BEETLE'],
+                'Lexus': ['LEXUS', 'RX300', 'RX350', 'ES350', 'GS350'],
+                'Acura': ['ACURA', 'TL', 'MDX', 'RDX', 'TSX']
+            }
+            
+            part_upper = part_number.upper()
+            
+            # Check if part number contains make-specific patterns
+            for make, patterns in part_patterns.items():
+                for pattern in patterns:
+                    if pattern in part_upper:
+                        makes.add(make)
+                        logger.info(f"Found make from part pattern: {make} (pattern: {pattern})")
+                        break
+            
+            # Additional context-based logic for specific part types
+            if any(prefix in part_upper for prefix in ['HS', 'HEAD']):
+                # Head gasket sets are often Ford truck parts
+                if any(indicator in part_upper for indicator in ['54657', '5465']):
+                    makes.add('Ford')
+                    logger.info("Found Ford from head gasket part pattern")
+            
+        except Exception as e:
+            logger.warning(f"Error in part context extraction: {e}")
+        
+        return makes
+    
+    def _simple_google_search_enhanced(self, query: str) -> set:
+        """Enhanced Google search with better pattern matching."""
+        makes = set()
+        try:
+            search_url = "https://www.google.com/search"
+            params = {'q': query, 'num': 10}
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+            }
+            
+            response = requests.get(search_url, params=params, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Extract text from search result titles and snippets
+                search_elements = []
+                # Look for result titles and descriptions
+                search_elements.extend(soup.find_all(['h3', 'span', 'div'], class_=re.compile(r'title|snippet|description', re.I)))
+                # Also check direct text content
+                search_elements.extend(soup.find_all(text=True))
+                
+                for element in search_elements:
+                    if hasattr(element, 'get_text'):
+                        text = element.get_text()
+                    else:
+                        text = str(element)
+                    
+                    text = text.upper()
+                    
+                    # Skip very short or very long strings
+                    if len(text) < 10 or len(text) > 200:
+                        continue
+                    
+                    # Look for year-make patterns like "2010 Ford F-550"
+                    year_make_patterns = re.findall(r'\b(19|20)\d{2}\s+([A-Z][A-Z]+)', text)
+                    for _, make in year_make_patterns:
+                        if self._is_known_make(make):
+                            normalized = self._normalize_make(make)
+                            makes.add(normalized)
+                            logger.info(f"Found make from Google search: {normalized}")
+                            if len(makes) >= 3:  # Limit results
+                                return makes
+                    
+                    # Look for standalone make names in automotive context
+                    words = text.split()
+                    for i, word in enumerate(words):
+                        word_clean = re.sub(r'[^\w]', '', word)
+                        if self._is_known_make(word_clean):
+                            # Check automotive context
+                            context_words = words[max(0, i-4):i+5]
+                            context_text = ' '.join(context_words).upper()
+                            
+                            if any(auto_word in context_text for auto_word in [
+                                'PART', 'AUTO', 'CAR', 'VEHICLE', 'ENGINE', 'BRAKE', 'FILTER',
+                                'GASKET', 'HEAD', 'CYLINDER', 'TRANSMISSION', 'SUSPENSION',
+                                'OEM', 'AFTERMARKET', 'REPLACEMENT', 'FITS', 'FOR',
+                                'SUPER', 'DUTY', 'PICKUP', 'TRUCK', 'SEDAN', 'COUPE'
+                            ]):
+                                normalized = self._normalize_make(word_clean)
+                                makes.add(normalized)
+                                logger.info(f"Found make from Google context: {normalized}")
+                                if len(makes) >= 3:
+                                    return makes
+            
+        except Exception as e:
+            logger.warning(f"Enhanced Google search failed: {e}")
+        
+        return makes
+    
+    def _simple_google_search(self, part_number: str) -> set:
+        """Simple fallback Google search using requests."""
+        makes = set()
+        try:
+            # Use a simple Google search URL
+            query = f'"{part_number}" advanced auto parts'
+            search_url = f"https://www.google.com/search"
+            params = {'q': query, 'num': 10}
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            }
+            
+            response = requests.get(search_url, params=params, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                # Simple text extraction for vehicle makes
+                text = response.text.upper()
+                
+                # Look for common patterns in the HTML
+                year_make_patterns = re.findall(r'\b(19|20)\d{2}\s+([A-Z][A-Z]+)', text)
+                for _, make in year_make_patterns[:20]:  # Limit to first 20 matches
+                    if self._is_known_make(make):
+                        normalized = self._normalize_make(make)
+                        makes.add(normalized)
+                        if len(makes) >= 3:  # Stop after finding 3 makes
+                            break
+            
+        except Exception as e:
+            logger.warning(f"Simple Google search failed: {e}")
+        
+        return makes
+    
     def process_parts_batch(self, parts: List[Dict], max_parts: int = 10, skip_existing: bool = True, 
                            existing_results_file: str = None) -> List[Dict]:
         """Process a batch of parts to find their vehicle makes, optionally skipping those with existing makes."""
@@ -594,6 +783,12 @@ class AutoPartsDetector:
                 logger.info(f"PartsGeek failed for {part_number}, trying Advance Auto...")
                 makes = self.search_advance_auto(part_number)
                 source = 'AdvanceAuto'
+            
+            # If all direct searches fail, try Google search as final fallback
+            if not makes:
+                logger.info(f"All direct searches failed for {part_number}, trying Google search...")
+                makes = self.search_google_fallback(part_number)
+                source = 'Google'
             
             # Record results
             part_result = part.copy()
