@@ -1,0 +1,954 @@
+#!/usr/bin/env python3
+"""
+Automotive Parts Make Detector
+
+This script processes a CSV file of automotive parts, extracts part numbers,
+and queries RockAuto.com and other auto parts websites to determine which
+vehicle makes each part fits.
+
+Author: Python Data Engineer + Automotive Parts Analyst
+"""
+
+import pandas as pd
+import requests
+import time
+import re
+import os
+from bs4 import BeautifulSoup
+from urllib.parse import quote_plus
+import logging
+from typing import List, Dict, Optional, Tuple
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from webdriver_manager.chrome import ChromeDriverManager
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+class AutoPartsDetector:
+    def __init__(self, csv_file: str):
+        """Initialize the parts detector with a CSV file."""
+        self.csv_file = csv_file
+        self.df = None
+        self.session = requests.Session()
+        self.driver = None
+        
+        # Configure session with proper headers to avoid being blocked
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none'
+        })
+        
+        # Keywords for categorizing parts
+        self.automotive_keywords = [
+            # Engine & Performance
+            'brake', 'rotor', 'pad', 'sensor', 'catalytic', 'converter', 'filter', 'oil', 'air',
+            'fuel', 'pump', 'alternator', 'starter', 'battery', 'spark', 'plug', 'belt',
+            'hose', 'gasket', 'bearing', 'transmission', 'clutch', 'radiator', 'thermostat',
+            'water pump', 'timing', 'valve', 'piston', 'engine', 'exhaust', 'muffler',
+            'head bolts', 'head set', 'cylinder', 'manifold', 'turbo', 'supercharger',
+            'compressor', 'a/c compressor', 'ac compressor', 'air compressor',
+            'vapor canister', 'canister', 'emission', 'evap',
+            
+            # Suspension & Steering  
+            'suspension', 'shock', 'strut', 'tie rod', 'ball joint', 'cv', 'axle',
+            'lift support', 'control arm', 'sway bar', 'stabilizer', 'rack', 'pinion',
+            'steering', 'power steering', 'mount', 'assembly', 'bushing', 'linkage',
+            'spring', 'coil', 'leaf', 'hendrickson', 'load spring',
+            
+            # Braking System
+            'caliper', 'master cylinder', 'brake booster', 'brake line', 'brake fluid',
+            'abs', 'brake shoe', 'drum', 'disc',
+            
+            # Electrical & Lighting
+            'headlight', 'taillight', 'mirror', 'wiper', 'horn', 'ballast', 'hid', 'led',
+            'clock spring', 'blower', 'resistor', 'relay', 'fuse', 'ignition', 'coil',
+            'wire', 'wiring', 'harness', 'switch', 'motor', 'alternator', 'generator',
+            'tpms', 'pressure monitoring', 'pigtail', 'light bulb socket', 'electrical socket',
+            'temp sender', 'sender', 'temperature gauge', 'pressure gauge',
+            
+            # Body & Interior
+            'bumper', 'fender', 'door', 'window', 'seat', 'console', 'trim', 'panel',
+            'weatherstrip', 'seal', 'handle', 'latch', 'lock', 'antenna', 'retractable',
+            'turn signal', 'signal switch',
+            
+            # Wheels & Tires
+            'wheel', 'tire', 'rim', 'hub', 'lug', 'stud', 'cap',
+            
+            # Hardware & Mounting
+            'flange', 'bolt', 'u bolt', 'clamp', 'bracket', 'hanger', 'isolator',
+            'grommet', 'clip', 'fastener', 'torque rod', 'caster', 'coolant', 'reservoir',
+            
+            # Truck/Heavy Duty Components
+            'freightliner', 'peterbilt', 'kenworth', 'mack', 'volvo truck', 'international truck',
+            'semi', 'trailer', 'fifth wheel', 'kingpin', 'glad hand', 'air brake'
+        ]
+        
+        self.tool_keywords = [
+            # Power Tools  
+            'angle grinder', 'circular saw', 'jigsaw', 'rotary hammer', 'demolition hammer',
+            'drill', 'saw', 'hammer', 'screwdriver', 'pliers', 'sanders', 'router', 
+            'chainsaw', 'recip', 'reciprocating',
+            
+            # Hand Tools
+            'hand tool', 'tool kit', 'tool set', 'wrench set', 'socket set', 'socket',
+            'wrench', 'torque wrench',
+            
+            # Diagnostic & Code Tools (not automotive gauges/sensors)
+            'multimeter', 'code reader', 'oscilloscope', 'scan tool', 'digital gauge', 'dial gauge',
+            
+            # Jacks & Lifting Equipment
+            'floor jack', 'bottle jack', 'scissor jack', 'transmission jack',
+            'engine hoist', 'cherry picker', 'porta power',
+            
+            # Tire Service Equipment
+            'bead breaker', 'tire changer', 'wheel balancer', 'tire iron',
+            
+            # Workshop Equipment
+            'vise', 'anvil', 'work bench', 'toolbox', 'tool chest', 'creeper', 'work light'
+        ]
+    
+    def _initialize_browser(self):
+        """Initialize Selenium WebDriver with Chrome."""
+        if self.driver is None:
+            try:
+                # Configure Chrome options
+                chrome_options = Options()
+                # Keep visible for debugging - can be headless for production
+                # chrome_options.add_argument('--headless')
+                chrome_options.add_argument('--no-sandbox')
+                chrome_options.add_argument('--disable-dev-shm-usage')
+                chrome_options.add_argument('--disable-gpu')
+                chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+                chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                chrome_options.add_experimental_option('useAutomationExtension', False)
+                chrome_options.add_argument('--window-size=1920,1080')
+                chrome_options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+                
+                # Initialize driver
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                
+                # Execute script to hide automation indicators
+                self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                
+                logger.info("Browser initialized successfully")
+                
+            except Exception as e:
+                logger.error(f"Failed to initialize browser: {e}")
+                raise
+    
+    def _close_browser(self):
+        """Close the browser if it's open."""
+        if self.driver:
+            try:
+                self.driver.quit()
+                self.driver = None
+                logger.info("Browser closed")
+            except Exception as e:
+                logger.warning(f"Error closing browser: {e}")
+    
+    def __del__(self):
+        """Ensure browser is closed when object is destroyed."""
+        self._close_browser()
+    
+    def load_data(self) -> None:
+        """Load and parse the CSV file."""
+        try:
+            self.df = pd.read_csv(self.csv_file)
+            logger.info(f"Loaded {len(self.df)} rows from {self.csv_file}")
+            logger.info(f"Columns: {list(self.df.columns)}")
+        except Exception as e:
+            logger.error(f"Error loading CSV file: {e}")
+            raise
+    
+    def extract_part_number(self, item_num: str) -> str:
+        """Extract part number after the first underscore."""
+        if pd.isna(item_num) or not isinstance(item_num, str):
+            return ""
+        
+        underscore_index = item_num.find('_')
+        if underscore_index != -1:
+            return item_num[underscore_index + 1:]
+        return item_num
+    
+    def categorize_parts(self) -> Dict[str, List[Dict]]:
+        """Categorize parts into automotive, tools, and unknown."""
+        categorized = {
+            'automotive': [],
+            'tools': [],
+            'unknown': []
+        }
+        
+        for index, row in self.df.iterrows():
+            item_num = row.get('Item #', '')
+            description = str(row.get('Item Description', '')).lower()
+            part_number = self.extract_part_number(item_num)
+            
+            part_data = {
+                'index': index,
+                'item_num': item_num,
+                'part_number': part_number,
+                'description': row.get('Item Description', ''),
+                'qty': row.get('Qty', 0),
+                'unit_retail': row.get('Unit Retail', 0),
+                'ext_retail': row.get('Ext. Retail', 0)
+            }
+            
+            # Check if automotive first (priority over tools)
+            is_automotive = any(keyword in description for keyword in self.automotive_keywords)
+            
+            # Only check for tools if it's not automotive
+            # Also exclude automotive contexts for tool keywords
+            is_tool = False
+            if not is_automotive:
+                is_tool = any(keyword in description for keyword in self.tool_keywords)
+                
+                # Special handling: automotive sockets, gauges, compressors should be automotive
+                if is_tool and any(auto_context in description for auto_context in [
+                    'a/c', 'ac ', 'air conditioning', 'temp sender', 'temperature', 
+                    'coolant', 'oil pressure', 'fuel', 'vacuum', 'brake', 'transmission',
+                    'engine', 'exhaust', 'emission', 'sensor', 'electrical', 'wiring'
+                ]):
+                    is_tool = False
+                    is_automotive = True
+            
+            if is_automotive:
+                categorized['automotive'].append(part_data)
+            elif is_tool:
+                categorized['tools'].append(part_data)
+            else:
+                categorized['unknown'].append(part_data)
+        
+        logger.info(f"Categorized parts: {len(categorized['automotive'])} automotive, "
+                   f"{len(categorized['tools'])} tools, {len(categorized['unknown'])} unknown")
+        
+        return categorized
+    
+    def search_rockauto(self, part_number: str, part_description: str = "", full_item_num: str = "") -> Optional[List[str]]:
+        """Search RockAuto for a part number using streamlined direct search."""
+        try:
+            # Initialize browser if needed
+            if self.driver is None:
+                self._initialize_browser()
+            
+            # Use direct part search URL - most efficient method
+            search_url = f"https://www.rockauto.com/en/partsearch/?partnum={part_number}"
+            logger.info(f"Direct part search: {search_url}")
+            self.driver.get(search_url)
+            
+            # Wait for page to load
+            time.sleep(3)
+            current_url = self.driver.current_url
+            logger.info(f"Result URL: {current_url}")
+            
+            makes = set()
+            
+            # Check for immediate buyers guide popup first
+            try:
+                popup = WebDriverWait(self.driver, 2).until(
+                    EC.presence_of_element_located((By.ID, "buyersguidepopup-outer_b"))
+                )
+                logger.info("Found immediate buyers guide popup")
+                makes.update(self._extract_makes_from_popup())
+                if makes:
+                    logger.info(f"Success: Found makes from immediate popup: {makes}")
+                    return sorted([make for make in makes if self._is_valid_make(make)])
+            except TimeoutException:
+                pass
+            
+            # If on search results page, look for part links that trigger popups
+            if "/partsearch" in current_url:
+                logger.info("On search results page - looking for part links")
+                
+                # Find all part number links that trigger the buyers guide popup
+                part_links = self.driver.find_elements(By.CSS_SELECTOR, "span[id^='vew_partnumber']")
+                logger.info(f"Found {len(part_links)} part number links")
+                
+                if part_links:
+                    # Get the text of each part link to see what we found
+                    for i, link in enumerate(part_links[:5]):  # Check first 5
+                        try:
+                            part_text = link.text.strip()
+                            logger.info(f"Part link {i+1}: {part_text}")
+                        except:
+                            pass
+                    
+                    # Try clicking the first few part links to trigger popup
+                    for i, link in enumerate(part_links[:3]):  # Try first 3 links
+                        try:
+                            if link.is_displayed():
+                                part_text = link.text.strip()
+                                logger.info(f"Clicking part link {i+1}: {part_text}")
+                                link.click()
+                                time.sleep(2)
+                                
+                                # Check for popup after click
+                                try:
+                                    WebDriverWait(self.driver, 3).until(
+                                        EC.presence_of_element_located((By.ID, "buyersguidepopup-outer_b"))
+                                    )
+                                    logger.info("Popup appeared after clicking part link")
+                                    makes.update(self._extract_makes_from_popup())
+                                    if makes:
+                                        logger.info(f"Success: Found makes from popup: {makes}")
+                                        return sorted([make for make in makes if self._is_valid_make(make)])
+                                except TimeoutException:
+                                    logger.info(f"No popup appeared for part {part_text}")
+                                    continue
+                        except Exception as e:
+                            logger.warning(f"Error clicking part link {i+1}: {e}")
+                            continue
+                else:
+                    logger.info("No part number links found on search results page")
+            
+            # If no popup appeared, check if page indicates no results
+            page_source = self.driver.page_source.lower()
+            if any(phrase in page_source for phrase in ['no results', 'no matches', 'not found', 'no applications found']):
+                logger.info(f"RockAuto indicates no results for part {part_number}")
+                return None
+            
+            logger.info(f"No vehicle makes found for part {part_number}")
+            return None
+                
+        except Exception as e:
+            logger.error(f"Error searching RockAuto for {part_number}: {e}")
+            return None
+    
+    
+    def _extract_makes_from_popup(self) -> set:
+        """Extract makes from buyers guide popup."""
+        makes = set()
+        try:
+            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+            popup = soup.find('div', id='buyersguidepopup-outer_b')
+            
+            if popup:
+                popup_text = popup.get_text().strip()
+                logger.info(f"Found buyers guide popup with text: '{popup_text}'")
+                
+                # Check for no applications message
+                if "no applications found" in popup_text.lower():
+                    logger.info("Popup indicates no applications found for this part")
+                    return makes
+                
+                # Look for table rows
+                rows = popup.find_all('tr')
+                logger.info(f"Found {len(rows)} table rows in popup")
+                
+                if len(rows) == 0:
+                    # Try looking for other content structures
+                    all_text = popup_text.upper()
+                    logger.info(f"No table rows, checking full popup text: '{all_text}'")
+                    
+                    # Extract makes from any text patterns
+                    words = all_text.split()
+                    for word in words:
+                        word_clean = re.sub(r'[^\w]', '', word)
+                        if self._is_known_make(word_clean):
+                            normalized = self._normalize_make(word_clean)
+                            makes.add(normalized)
+                            logger.info(f"Found make from popup text: {normalized}")
+                
+                for i, row in enumerate(rows[:10]):  # Check first 10 rows
+                    cells = row.find_all('td')
+                    logger.info(f"Row {i+1}: {len(cells)} cells")
+                    
+                    for j, cell in enumerate(cells[:5]):  # Check first 5 cells
+                        text = cell.get_text().strip()
+                        logger.info(f"  Cell {j+1}: '{text}'")
+                        
+                        if text:  # Only process non-empty cells
+                            text_upper = text.upper()
+                            
+                            # Method 1: Look for year-make patterns like "2008 HONDA"
+                            year_make_matches = re.findall(r'\b(19|20)\d{2}[-\s]+([A-Z][A-Z]+)', text_upper)
+                            for year, make in year_make_matches:
+                                if self._is_known_make(make):
+                                    normalized = self._normalize_make(make)
+                                    makes.add(normalized)
+                                    logger.info(f"Found make from year-make pattern: {normalized}")
+                            
+                            # Method 2: Look for standalone make names
+                            words = text_upper.split()
+                            for word in words:
+                                word_clean = re.sub(r'[^\w]', '', word)  # Remove punctuation
+                                if self._is_known_make(word_clean):
+                                    normalized = self._normalize_make(word_clean)
+                                    makes.add(normalized)
+                                    logger.info(f"Found make from standalone word: {normalized}")
+                            
+                            # Method 3: Look for common patterns like "Fits: FORD HONDA"
+                            fits_match = re.search(r'(?:fits?|compatible|for)[:.\s]*([A-Z\s,]+)', text_upper)
+                            if fits_match:
+                                fits_text = fits_match.group(1)
+                                potential_makes = re.findall(r'\b([A-Z]{3,})\b', fits_text)
+                                for make in potential_makes:
+                                    if self._is_known_make(make):
+                                        normalized = self._normalize_make(make)
+                                        makes.add(normalized)
+                                        logger.info(f"Found make from fits pattern: {normalized}")
+                
+                logger.info(f"Extracted {len(makes)} unique makes from popup: {makes}")
+            else:
+                logger.warning("No buyers guide popup found in HTML")
+        
+        except Exception as e:
+            logger.warning(f"Error extracting from popup: {e}")
+        
+        return makes
+    
+    
+    def _is_known_make(self, make: str) -> bool:
+        """Check if make is a known automotive manufacturer."""
+        known_makes = {
+            'FORD', 'CHEVROLET', 'CHEVY', 'DODGE', 'TOYOTA', 'HONDA', 'NISSAN',
+            'BMW', 'MERCEDES', 'AUDI', 'VOLKSWAGEN', 'SUBARU', 'MAZDA',
+            'HYUNDAI', 'KIA', 'JEEP', 'CHRYSLER', 'BUICK', 'CADILLAC',
+            'ACURA', 'INFINITI', 'LEXUS', 'LINCOLN', 'VOLVO', 'SAAB',
+            'MITSUBISHI', 'ISUZU', 'SUZUKI', 'PONTIAC', 'OLDSMOBILE',
+            'SATURN', 'MERCURY', 'PLYMOUTH', 'EAGLE', 'GEO'
+        }
+        return make.upper() in known_makes
+    
+    def _normalize_make(self, make: str) -> str:
+        """Normalize make name to standard format."""
+        make_upper = make.upper()
+        if make_upper == 'CHEVY':
+            return 'Chevrolet'
+        return make.title()
+    
+    def _is_valid_make(self, make: str) -> bool:
+        """Check if extracted make is valid (not generic terms)."""
+        invalid_terms = {'part', 'parts', 'auto', 'car', 'vehicle', 'search', 'catalog', 'home'}
+        return make.lower() not in invalid_terms and len(make) > 1
+    
+    
+    def search_partsgeek(self, part_number: str) -> Optional[List[str]]:
+        """Search PartsGeek as an alternative source."""
+        try:
+            search_url = "https://www.partsgeek.com/catalog/search.php"
+            params = {'q': part_number}
+            
+            time.sleep(1.5)
+            response = self.session.get(search_url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                makes = set()
+                
+                # Look for vehicle compatibility in product listings
+                product_blocks = soup.find_all(['div', 'li'], class_=re.compile(r'product|item|result', re.I))
+                
+                for block in product_blocks:
+                    text = block.get_text().upper()
+                    # Look for year-make patterns
+                    year_make_matches = re.findall(r'(19|20)\d{2}[-\s]+([A-Z][A-Z]+)', text)
+                    for _, make in year_make_matches:
+                        if make in ['FORD', 'CHEVROLET', 'CHEVY', 'DODGE', 'TOYOTA', 'HONDA', 'NISSAN']:
+                            normalized_make = 'Chevrolet' if make == 'CHEVY' else make.title()
+                            makes.add(normalized_make)
+                
+                if makes:
+                    return sorted(list(makes))
+                
+                return None
+            else:
+                logger.warning(f"PartsGeek HTTP {response.status_code} for part {part_number}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error searching PartsGeek for {part_number}: {e}")
+            return None
+
+    def search_advance_auto(self, part_number: str) -> Optional[List[str]]:
+        """Search Advance Auto Parts as backup."""
+        try:
+            search_url = f"https://shop.advanceautoparts.com/web/SearchResults"
+            params = {'searchTerm': part_number}
+            
+            time.sleep(1.5)  # Slightly longer delay for backup source
+            response = self.session.get(search_url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                makes = set()
+                
+                # Check for no results
+                if soup.find(text=re.compile(r'(no results|not found|no items)', re.I)):
+                    logger.info(f"No results found on Advance Auto for part {part_number}")
+                    return None
+                
+                # Method 1: Look for specific vehicle finder URLs
+                vehicle_links = soup.find_all('a', href=re.compile(r'/find/[0-9]{4}-[a-z]+-'))
+                for link in vehicle_links:
+                    href = link.get('href', '')
+                    # Pattern: /find/2008-mazda-3-parts
+                    match = re.search(r'/find/[0-9]{4}-([a-z]+)-', href)
+                    if match:
+                        make = match.group(1).replace('-', ' ').title()
+                        makes.add(make)
+                
+                # Method 2: Look for product titles with year-make patterns
+                result_text = soup.get_text()
+                
+                # Search for patterns like "Fits 2008-2012 Honda" or "For 2010 Toyota"
+                fit_patterns = re.findall(r'(?:fits|for|compatible)\s+(?:[0-9]{4}[-\s]*[0-9]*\s+)?([A-Z][a-z]+)', result_text, re.I)
+                for make in fit_patterns:
+                    if (make.upper() in ['FORD', 'CHEVROLET', 'CHEVY', 'DODGE', 'TOYOTA', 'HONDA', 'NISSAN',
+                                       'BMW', 'MERCEDES', 'AUDI', 'VOLKSWAGEN', 'SUBARU', 'MAZDA',
+                                       'HYUNDAI', 'KIA', 'JEEP', 'CHRYSLER', 'BUICK', 'CADILLAC']):
+                        normalized_make = 'Chevrolet' if make.upper() == 'CHEVY' else make.title()
+                        makes.add(normalized_make)
+                
+                # Method 3: Look for year-make-model patterns
+                ymm_patterns = re.findall(r'\b(19|20)\d{2}\s+([A-Z][a-z]+)(?:\s+[A-Z][a-z]+)?', result_text)
+                for _, make in ymm_patterns:
+                    if (make.upper() in ['FORD', 'CHEVROLET', 'DODGE', 'TOYOTA', 'HONDA', 'NISSAN',
+                                       'BMW', 'MERCEDES', 'AUDI', 'VOLKSWAGEN', 'SUBARU', 'MAZDA',
+                                       'HYUNDAI', 'KIA', 'JEEP', 'CHRYSLER']):
+                        makes.add(make.title())
+                
+                # Filter and return results
+                if makes:
+                    filtered_makes = {make for make in makes 
+                                    if make.lower() not in ['part', 'parts', 'auto', 'car', 'vehicle', 'search']}
+                    if filtered_makes:
+                        return sorted(list(filtered_makes))
+                
+                return None
+            else:
+                logger.warning(f"Advance Auto HTTP {response.status_code} for part {part_number}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error searching Advance Auto for {part_number}: {e}")
+            return None
+    
+    def process_parts_batch(self, parts: List[Dict], max_parts: int = 10, skip_existing: bool = True, 
+                           existing_results_file: str = None) -> List[Dict]:
+        """Process a batch of parts to find their vehicle makes, optionally skipping those with existing makes."""
+        results = []
+        successful_lookups = 0
+        skipped_count = 0
+        
+        # Load existing results if specified
+        existing_makes = {}
+        if skip_existing and existing_results_file:
+            existing_makes = self._load_existing_makes(existing_results_file)
+            logger.info(f"Loaded {len(existing_makes)} existing make entries from {existing_results_file}")
+        
+        logger.info(f"Starting batch processing of {min(max_parts, len(parts))} parts...")
+        if skip_existing:
+            logger.info("Skip mode enabled - will skip parts that already have make information")
+        
+        for i, part in enumerate(parts[:max_parts]):
+            part_number = part['part_number']
+            item_num = part.get('item_num', '')
+            
+            # Check if we should skip this part
+            if skip_existing:
+                existing_make = self._check_existing_make(part, existing_makes)
+                if existing_make and existing_make not in ['NOT_FOUND', 'UNKNOWN_CATEGORY', '']:
+                    logger.info(f"⏭️  Skipping part {i+1}/{min(max_parts, len(parts))}: {part_number} "
+                               f"(already has make: {existing_make})")
+                    
+                    # Add to results with existing information
+                    part_result = part.copy()
+                    part_result['makes'] = existing_make
+                    part_result['source'] = 'EXISTING'
+                    part_result['confidence'] = 'Existing'
+                    results.append(part_result)
+                    successful_lookups += 1
+                    skipped_count += 1
+                    continue
+            
+            logger.info(f"Processing part {i+1}/{min(max_parts, len(parts))}: {part_number}")
+            logger.info(f"Part description: {part['description']}")
+            
+            # Try RockAuto first - pass both part number and full item number
+            makes = self.search_rockauto(part_number, part['description'], item_num)
+            source = 'RockAuto'
+            
+            # If RockAuto fails, try PartsGeek
+            if not makes:
+                logger.info(f"RockAuto failed for {part_number}, trying PartsGeek...")
+                makes = self.search_partsgeek(part_number)
+                source = 'PartsGeek'
+            
+            # If PartsGeek fails, try Advance Auto
+            if not makes:
+                logger.info(f"PartsGeek failed for {part_number}, trying Advance Auto...")
+                makes = self.search_advance_auto(part_number)
+                source = 'AdvanceAuto'
+            
+            # Record results
+            part_result = part.copy()
+            if makes:
+                # Clean and deduplicate makes
+                unique_makes = list(set(makes))
+                unique_makes.sort()  # Alphabetical order
+                
+                part_result['makes'] = ', '.join(unique_makes)
+                part_result['source'] = source
+                part_result['confidence'] = 'High' if len(unique_makes) <= 3 else 'Medium'
+                successful_lookups += 1
+                logger.info(f"✅ Found makes for {part_number}: {part_result['makes']}")
+            else:
+                part_result['makes'] = 'NOT_FOUND'
+                part_result['source'] = 'NONE'
+                part_result['confidence'] = 'None'
+                logger.warning(f"❌ No makes found for {part_number}")
+            
+            results.append(part_result)
+            
+            # Progress update every 3 parts
+            if (i + 1) % 3 == 0:
+                actual_processed = (i + 1) - skipped_count
+                if actual_processed > 0:
+                    success_rate = ((successful_lookups - skipped_count) / actual_processed) * 100
+                else:
+                    success_rate = 0
+                logger.info(f"Progress: {i + 1}/{min(max_parts, len(parts))} parts completed "
+                           f"({skipped_count} skipped, {actual_processed} processed), "
+                           f"success rate: {success_rate:.1f}%")
+        
+        # Final summary
+        actual_processed = len(results) - skipped_count
+        if actual_processed > 0:
+            final_success_rate = ((successful_lookups - skipped_count) / actual_processed) * 100
+        else:
+            final_success_rate = 0
+            
+        logger.info(f"Batch processing complete!")
+        logger.info(f"  Total parts: {len(results)}")
+        logger.info(f"  Skipped (already had makes): {skipped_count}")
+        logger.info(f"  Actually processed: {actual_processed}")
+        logger.info(f"  New matches found: {successful_lookups - skipped_count}")
+        logger.info(f"  Success rate for new parts: {final_success_rate:.1f}%")
+        
+        # Close browser after processing
+        self._close_browser()
+        
+        return results
+    
+    def _load_existing_makes(self, filename: str) -> Dict[str, str]:
+        """Load existing make information from a CSV file."""
+        existing_makes = {}
+        try:
+            if not os.path.exists(filename):
+                logger.info(f"Existing results file {filename} not found, will process all parts")
+                return existing_makes
+                
+            import pandas as pd
+            df = pd.read_csv(filename)
+            
+            # Check if required columns exist
+            required_cols = ['Item #', 'Part Number', 'Makes']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                logger.warning(f"Missing columns in {filename}: {missing_cols}. Will process all parts.")
+                return existing_makes
+            
+            # Build lookup dictionary
+            for _, row in df.iterrows():
+                item_num = str(row.get('Item #', ''))
+                part_num = str(row.get('Part Number', ''))
+                makes = str(row.get('Makes', ''))
+                
+                if item_num and item_num != 'nan':
+                    existing_makes[item_num] = makes
+                if part_num and part_num != 'nan':
+                    existing_makes[part_num] = makes
+            
+            logger.info(f"Successfully loaded {len(existing_makes)} existing make entries")
+            
+        except Exception as e:
+            logger.warning(f"Error loading existing makes from {filename}: {e}")
+            
+        return existing_makes
+    
+    def _check_existing_make(self, part: Dict, existing_makes: Dict[str, str]) -> str:
+        """Check if a part already has make information."""
+        item_num = part.get('item_num', '')
+        part_number = part.get('part_number', '')
+        
+        # Check by item number first (more specific)
+        if item_num and item_num in existing_makes:
+            return existing_makes[item_num]
+            
+        # Check by part number
+        if part_number and part_number in existing_makes:
+            return existing_makes[part_number]
+            
+        return ''
+    
+    def _merge_chunk_results(self, chunk_results: List[Dict], all_categorized: Dict, 
+                            start_idx: int, existing_file: str = None) -> List[Dict]:
+        """Merge chunk processing results with existing data."""
+        try:
+            # Start with all automotive parts
+            all_automotive = all_categorized['automotive']
+            merged_results = []
+            
+            # Load existing results if available
+            existing_data = {}
+            if existing_file and os.path.exists(existing_file):
+                try:
+                    import pandas as pd
+                    df = pd.read_csv(existing_file)
+                    # Create lookup by item number
+                    for _, row in df.iterrows():
+                        item_num = str(row.get('Item #', ''))
+                        if item_num and item_num != 'nan':
+                            existing_data[item_num] = {
+                                'makes': str(row.get('Makes', '')),
+                                'source': str(row.get('Source', '')),
+                                'confidence': str(row.get('Confidence', ''))
+                            }
+                except Exception as e:
+                    logger.warning(f"Could not load existing results for merging: {e}")
+            
+            # Create results for all parts
+            for i, part in enumerate(all_automotive):
+                item_num = part.get('item_num', '')
+                
+                # Check if this part was in our processed chunk
+                if start_idx <= i < start_idx + len(chunk_results):
+                    # Use the newly processed result
+                    chunk_idx = i - start_idx
+                    merged_results.append(chunk_results[chunk_idx])
+                elif item_num in existing_data:
+                    # Use existing data
+                    part_result = part.copy()
+                    existing = existing_data[item_num]
+                    part_result['makes'] = existing['makes']
+                    part_result['source'] = existing['source']
+                    part_result['confidence'] = existing.get('confidence', 'Existing')
+                    merged_results.append(part_result)
+                else:
+                    # No data available - mark as not processed
+                    part_result = part.copy()
+                    part_result['makes'] = 'NOT_PROCESSED'
+                    part_result['source'] = 'N/A'
+                    part_result['confidence'] = 'None'
+                    merged_results.append(part_result)
+                    
+            logger.info(f"Merged chunk results: {len(merged_results)} total parts")
+            return merged_results
+            
+        except Exception as e:
+            logger.error(f"Error merging chunk results: {e}")
+            # Fallback to just returning the chunk results
+            return chunk_results
+    
+    def export_results(self, automotive_results: List[Dict], 
+                      tool_parts: List[Dict], 
+                      unknown_parts: List[Dict],
+                      output_file: str = 'enriched_parts.csv') -> None:
+        """Export results to a new CSV file."""
+        
+        # Create new dataframe with all results
+        all_results = []
+        
+        # Add automotive parts with makes
+        for result in automotive_results:
+            row = {
+                'Item #': result['item_num'],
+                'Item Description': result['description'],
+                'Qty': result['qty'],
+                'Unit Retail': result['unit_retail'],
+                'Ext. Retail': result['ext_retail'],
+                'Part Number': result['part_number'],
+                'Category': 'Automotive',
+                'Makes': result.get('makes', 'NOT_PROCESSED'),
+                'Source': result.get('source', 'N/A')
+            }
+            all_results.append(row)
+        
+        # Add tool parts
+        for part in tool_parts:
+            row = {
+                'Item #': part['item_num'],
+                'Item Description': part['description'],
+                'Qty': part['qty'],
+                'Unit Retail': part['unit_retail'],
+                'Ext. Retail': part['ext_retail'],
+                'Part Number': part['part_number'],
+                'Category': 'Tools',
+                'Makes': 'N/A (Tool)',
+                'Source': 'N/A'
+            }
+            all_results.append(row)
+        
+        # Add unknown parts
+        for part in unknown_parts:
+            row = {
+                'Item #': part['item_num'],
+                'Item Description': part['description'],
+                'Qty': part['qty'],
+                'Unit Retail': part['unit_retail'],
+                'Ext. Retail': part['ext_retail'],
+                'Part Number': part['part_number'],
+                'Category': 'Unknown',
+                'Makes': 'UNKNOWN_CATEGORY',
+                'Source': 'N/A'
+            }
+            all_results.append(row)
+        
+        # Create DataFrame and export
+        results_df = pd.DataFrame(all_results)
+        results_df.to_csv(output_file, index=False)
+        logger.info(f"Results exported to {output_file}")
+        
+        # Print summary
+        print(f"\n=== PROCESSING SUMMARY ===")
+        print(f"Total parts processed: {len(all_results)}")
+        print(f"Automotive parts: {len(automotive_results)}")
+        print(f"Tool parts: {len(tool_parts)}")
+        print(f"Unknown parts: {len(unknown_parts)}")
+        
+        if automotive_results:
+            found_makes = sum(1 for r in automotive_results if r.get('makes', 'NOT_FOUND') != 'NOT_FOUND')
+            print(f"Automotive parts with makes found: {found_makes}/{len(automotive_results)}")
+
+def main():
+    """Main execution function."""
+    print("=== AUTOMOTIVE PARTS MAKE DETECTOR ===")
+    
+    # Initialize detector
+    detector = AutoPartsDetector('advLOT_DC52-MIX.csv')
+    
+    # Load data
+    detector.load_data()
+    
+    # Categorize parts
+    categorized = detector.categorize_parts()
+    
+    total_parts = len(categorized['automotive'])
+    print(f"\nFound {total_parts} automotive parts.")
+    
+    # Ask user for processing preference with chunk options
+    print("\nProcessing Options:")
+    print("  1. Process all parts")
+    print("  2. Process test batch (100 parts)")
+    print("  3. Process custom chunk (specify range)")
+    
+    choice = input("Enter your choice (1, 2, or 3): ").strip()
+    
+    start_idx = 0
+    max_parts = total_parts
+    chunk_suffix = "full"
+    
+    if choice == '2':
+        max_parts = 100
+        chunk_suffix = "test"
+    elif choice == '3':
+        # Handle custom chunk processing
+        print(f"\nCustom Chunk Processing (Total parts: {total_parts})")
+        print("Examples:")
+        print("  - Enter '100-200' to process parts 100 to 200")
+        print("  - Enter '500-' or '500-end' to process from 500 to end")  
+        print("  - Enter '0-500' to process first 500 parts")
+        
+        range_input = input("Enter range (e.g., '100-200', '500-end'): ").strip()
+        
+        try:
+            if '-' in range_input:
+                parts = range_input.split('-', 1)
+                start_str = parts[0].strip()
+                end_str = parts[1].strip()
+                
+                # Parse start index
+                start_idx = int(start_str) if start_str else 0
+                
+                # Parse end index  
+                if not end_str or end_str.lower() in ['end', '']:
+                    end_idx = total_parts
+                else:
+                    end_idx = int(end_str)
+                
+                # Validate range
+                if start_idx < 0:
+                    start_idx = 0
+                if end_idx > total_parts:
+                    end_idx = total_parts
+                if start_idx >= end_idx:
+                    print("❌ Invalid range: start must be less than end")
+                    return
+                    
+                max_parts = end_idx - start_idx
+                chunk_suffix = f"chunk_{start_idx}_{end_idx}"
+                
+                print(f"✅ Will process parts {start_idx} to {end_idx} ({max_parts} parts)")
+                
+            else:
+                print("❌ Invalid range format. Please use format like '100-200' or '500-end'")
+                return
+                
+        except ValueError:
+            print("❌ Invalid range format. Please use numbers like '100-200' or '500-end'")
+            return
+    
+    # Select the chunk of parts to process
+    parts_to_process = categorized['automotive'][start_idx:start_idx + max_parts]
+    output_file = f"enriched_parts_{chunk_suffix}.csv"
+    
+    print(f"\nProcessing {len(parts_to_process)} automotive parts...")
+    if start_idx > 0:
+        print(f"Starting from index {start_idx}")
+    
+    # Ask about skipping existing results
+    skip_existing = True
+    existing_file = None
+    if os.path.exists(output_file):
+        skip_choice = input(f"\nFound existing results file: {output_file}\n"
+                          f"Skip parts that already have makes? (Y/n): ").strip().lower()
+        if skip_choice in ['', 'y', 'yes']:
+            skip_existing = True
+            existing_file = output_file
+            print("✅ Will skip parts that already have make information")
+        else:
+            skip_existing = False
+            print("Will process all parts (may overwrite existing results)")
+    
+    if skip_existing and existing_file:
+        print("Checking for existing results to skip...")
+    print("This may take several minutes due to rate limiting...")
+    
+    # Process automotive parts with skip functionality
+    automotive_results = detector.process_parts_batch(
+        parts_to_process, 
+        max_parts=len(parts_to_process),
+        skip_existing=skip_existing,
+        existing_results_file=existing_file
+    )
+    
+    # For chunk processing, we need to include all parts in export but only update the processed ones
+    if choice == '3' and start_idx > 0:
+        # Load existing data to merge with new results
+        all_results = detector._merge_chunk_results(automotive_results, categorized, start_idx, existing_file)
+        detector.export_results(all_results, categorized['tools'], 
+                               categorized['unknown'], output_file)
+    else:
+        # Normal export for full or test processing
+        detector.export_results(automotive_results, categorized['tools'], 
+                               categorized['unknown'], output_file)
+    
+    print(f"\n✅ Processing complete! Results saved to {output_file}")
+
+if __name__ == "__main__":
+    main()
