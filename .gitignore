@@ -13,6 +13,25 @@ venv/
 .vscode/
 .idea/
 
+# Node modules and build files
+node_modules/
+frontend/node_modules/
+frontend/build/
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Python cache and temp files
+*.pyc
+__pycache__/
+*.egg-info/
+.pytest_cache/
+uploads/
+exports/
+sessions/
+history/
+
 # OS files
 .DS_Store
 Thumbs.db

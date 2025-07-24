@@ -20,6 +20,17 @@ source venv/bin/activate  # Linux/Mac
 venv\Scripts\activate     # Windows
 ```
 
+## Virtual Environment and Python Setup
+
+- Always use a virtual environment for project isolation
+- Use `python3` to ensure correct Python version
+- Source the virtual environment before working
+- Use `pip3` for package management
+- Recommended workflow:
+  * Create virtual env: `python3 -m venv venv`
+  * Activate: `source venv/bin/activate`
+  * Install packages: `pip3 install -r requirements.txt`
+
 ## Running the Application
 
 Execute the main scraper:
@@ -65,3 +76,17 @@ The scraper implements proper rate limiting (1-1.5 second delays) and uses reali
 - Autonomously create git version control for the project
 - Create and manage issues directly through the GitHub CLI
 - Commit changes independently when necessary
+
+## Frontend Development Considerations
+
+- Potential frontend implementation considerations:
+  * Use React for building the user interface
+  * Create a separate API for backend processing
+  * Implement batch processing (e.g., first 50 items)
+  * Add functionality to:
+    - Import CSV file
+    - Stop/pause processing
+    - Run tests
+    - Run for a specific range of items
+  * Display results in a scrollable table
+  * Save partial results during processing

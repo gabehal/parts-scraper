@@ -54,71 +54,135 @@ class AutoPartsDetector:
         
         # Keywords for categorizing parts
         self.automotive_keywords = [
-            # Engine & Performance
-            'brake', 'rotor', 'pad', 'sensor', 'catalytic', 'converter', 'filter', 'oil', 'air',
-            'fuel', 'pump', 'alternator', 'starter', 'battery', 'spark', 'plug', 'belt',
-            'hose', 'gasket', 'bearing', 'transmission', 'clutch', 'radiator', 'thermostat',
-            'water pump', 'timing', 'valve', 'piston', 'engine', 'exhaust', 'muffler',
-            'head bolts', 'head set', 'cylinder', 'manifold', 'turbo', 'supercharger',
-            'compressor', 'a/c compressor', 'ac compressor', 'air compressor',
-            'vapor canister', 'canister', 'emission', 'evap',
+            # Engine & Performance - specific automotive terms
+            'brake pad', 'brake rotor', 'brake disc', 'brake shoe', 'brake line', 'brake fluid', 'brake booster',
+            'oil filter', 'air filter', 'fuel filter', 'cabin filter', 'catalytic converter',
+            'spark plug', 'glow plug', 'ignition coil', 'fuel pump', 'water pump', 'oil pump',
+            'alternator', 'starter', 'car battery', 'auto battery', 'timing belt', 'timing chain',
+            'serpentine belt', 'drive belt', 'radiator hose', 'heater hose', 'vacuum hose',
+            'head gasket', 'intake gasket', 'exhaust gasket', 'transmission fluid', 'transmission filter',
+            'clutch disc', 'clutch plate', 'pressure plate', 'flywheel', 'radiator', 'thermostat',
+            'cylinder head', 'engine block', 'piston ring', 'connecting rod', 'crankshaft',
+            'camshaft', 'valve cover', 'intake manifold', 'exhaust manifold', 'turbocharger',
+            'supercharger', 'intercooler', 'a/c compressor', 'ac compressor', 'condenser',
+            'evaporator', 'expansion valve', 'orifice tube', 'vapor canister', 'charcoal canister',
             
-            # Suspension & Steering  
-            'suspension', 'shock', 'strut', 'tie rod', 'ball joint', 'cv', 'axle',
-            'lift support', 'control arm', 'sway bar', 'stabilizer', 'rack', 'pinion',
-            'steering', 'power steering', 'mount', 'assembly', 'bushing', 'linkage',
-            'spring', 'coil', 'leaf', 'hendrickson', 'load spring',
+            # Suspension & Steering - specific automotive terms
+            'shock absorber', 'strut assembly', 'coil spring', 'leaf spring', 'air spring',
+            'tie rod end', 'ball joint', 'control arm', 'sway bar', 'stabilizer bar', 'anti-roll bar',
+            'cv joint', 'cv axle', 'drive axle', 'half shaft', 'driveshaft', 'prop shaft',
+            'steering rack', 'rack and pinion', 'power steering pump', 'steering column',
+            'steering wheel', 'tie rod', 'drag link', 'pitman arm', 'idler arm',
+            'engine mount', 'transmission mount', 'motor mount', 'strut mount',
+            'suspension bushing', 'control arm bushing', 'sway bar bushing',
             
-            # Braking System
-            'caliper', 'master cylinder', 'brake booster', 'brake line', 'brake fluid',
-            'abs', 'brake shoe', 'drum', 'disc',
+            # Braking System - already covered above, removing duplicates
+            'brake caliper', 'brake cylinder', 'master cylinder', 'wheel cylinder',
+            'brake drum', 'brake disc', 'abs module', 'abs sensor', 'abs pump',
             
-            # Electrical & Lighting
-            'headlight', 'taillight', 'mirror', 'wiper', 'horn', 'ballast', 'hid', 'led',
-            'clock spring', 'blower', 'resistor', 'relay', 'fuse', 'ignition', 'coil',
-            'wire', 'wiring', 'harness', 'switch', 'motor', 'alternator', 'generator',
-            'tpms', 'pressure monitoring', 'pigtail', 'light bulb socket', 'electrical socket',
-            'temp sender', 'sender', 'temperature gauge', 'pressure gauge',
+            # Electrical & Lighting - specific automotive terms
+            'headlight', 'headlamp', 'tail light', 'turn signal', 'fog light', 'running light',
+            'side mirror', 'rearview mirror', 'windshield wiper', 'wiper blade', 'wiper motor',
+            'horn', 'car horn', 'hid ballast', 'xenon ballast', 'led headlight',
+            'clock spring', 'blower motor', 'blower resistor', 'hvac blower', 'cabin fan',
+            'ignition switch', 'ignition module', 'ecu', 'pcm', 'bcm', 'abs module',
+            'wiring harness', 'engine harness', 'transmission harness', 'headlight harness',
+            'tpms sensor', 'tire pressure sensor', 'oxygen sensor', 'o2 sensor',
+            'map sensor', 'maf sensor', 'throttle position', 'crankshaft sensor', 'camshaft sensor',
+            'coolant temp sensor', 'oil pressure sensor', 'fuel level sensor',
             
-            # Body & Interior
-            'bumper', 'fender', 'door', 'window', 'seat', 'console', 'trim', 'panel',
-            'weatherstrip', 'seal', 'handle', 'latch', 'lock', 'antenna', 'retractable',
-            'turn signal', 'signal switch',
+            # Body & Interior - specific automotive terms
+            'car bumper', 'front bumper', 'rear bumper', 'fender', 'quarter panel',
+            'car door', 'door handle', 'door lock', 'door latch', 'window regulator',
+            'car seat', 'driver seat', 'passenger seat', 'seat belt', 'center console',
+            'dashboard', 'instrument panel', 'glove box', 'sun visor',
+            'weatherstrip', 'door seal', 'window seal', 'trunk seal', 'hood seal',
+            'car antenna', 'radio antenna', 'power antenna',
             
-            # Wheels & Tires
-            'wheel', 'tire', 'rim', 'hub', 'lug', 'stud', 'cap',
+            # Wheels & Tires - specific automotive terms
+            'car wheel', 'alloy wheel', 'steel wheel', 'wheel hub', 'hub assembly',
+            'lug nut', 'wheel stud', 'hub cap', 'center cap', 'valve stem',
+            'wheel bearing', 'hub bearing', 'tire valve', 'tpms valve',
             
-            # Hardware & Mounting
-            'flange', 'bolt', 'u bolt', 'clamp', 'bracket', 'hanger', 'isolator',
-            'grommet', 'clip', 'fastener', 'torque rod', 'caster', 'coolant', 'reservoir',
+            # Exhaust System
+            'exhaust pipe', 'muffler', 'catalytic converter', 'exhaust manifold',
+            'exhaust gasket', 'exhaust clamp', 'tail pipe', 'resonator',
+            
+            # HVAC System
+            'heater core', 'evaporator core', 'hvac blower', 'a/c evaporator',
+            'heater hose', 'hvac control', 'climate control', 'temperature blend door',
             
             # Truck/Heavy Duty Components
             'freightliner', 'peterbilt', 'kenworth', 'mack', 'volvo truck', 'international truck',
-            'semi', 'trailer', 'fifth wheel', 'kingpin', 'glad hand', 'air brake'
+            'semi truck', 'trailer', 'fifth wheel', 'kingpin', 'glad hand', 'air brake',
+            'diesel fuel', 'def fluid', 'urea tank', 'dpf filter', 'scr system'
         ]
         
         self.tool_keywords = [
             # Power Tools  
             'angle grinder', 'circular saw', 'jigsaw', 'rotary hammer', 'demolition hammer',
-            'drill', 'saw', 'hammer', 'screwdriver', 'pliers', 'sanders', 'router', 
-            'chainsaw', 'recip', 'reciprocating',
+            'electric drill', 'cordless drill', 'impact driver', 'driver drill', 'hammer drill',
+            'reciprocating saw', 'recip saw', 'band saw', 'miter saw', 'table saw',
+            'orbital sander', 'belt sander', 'palm sander', 'router tool', 'trim router',
+            'chainsaw', 'pole saw', 'leaf blower', 'pressure washer', 'shop vac',
             
-            # Hand Tools
-            'hand tool', 'tool kit', 'tool set', 'wrench set', 'socket set', 'socket',
-            'wrench', 'torque wrench',
+            # Hand Tools & Tool Sets
+            'hand tool', 'tool kit', 'tool set', 'mechanic tool set', 'wrench set', 
+            'socket set', 'ratchet set', 'combination wrench', 'box wrench', 'open wrench',
+            'torque wrench', 'breaker bar', 'extension bar', 'universal joint',
+            'screwdriver set', 'bit set', 'hex key', 'allen wrench', 'pliers set',
+            'needle nose', 'wire strippers', 'cutting pliers', 'locking pliers',
             
-            # Diagnostic & Code Tools (not automotive gauges/sensors)
-            'multimeter', 'code reader', 'oscilloscope', 'scan tool', 'digital gauge', 'dial gauge',
+            # Workshop Equipment & Storage
+            'toolbox', 'tool chest', 'tool cabinet', 'tool cart', 'rolling cart',
+            'work bench', 'workbench', 'shop stool', 'creeper', 'mechanics creeper',
+            'work light', 'shop light', 'led work light', 'trouble light',
+            'air compressor', 'shop compressor', 'portable compressor',
+            'bench vise', 'pipe vise', 'anvil', 'shop press',
             
-            # Jacks & Lifting Equipment
+            # Automotive Service Tools (tools, not parts)
             'floor jack', 'bottle jack', 'scissor jack', 'transmission jack',
-            'engine hoist', 'cherry picker', 'porta power',
+            'engine hoist', 'cherry picker', 'porta power', 'engine stand',
+            'tire changer', 'wheel balancer', 'bead breaker', 'tire iron', 'lug wrench',
+            'oil drain pan', 'funnel set', 'magnetic drain plug',
             
-            # Tire Service Equipment
-            'bead breaker', 'tire changer', 'wheel balancer', 'tire iron',
+            # Diagnostic & Test Equipment
+            'multimeter', 'digital multimeter', 'code reader', 'scan tool', 'obd scanner',
+            'oscilloscope', 'function generator', 'power supply', 'battery tester',
+            'compression tester', 'leak tester', 'timing light', 'stroboscope',
             
-            # Workshop Equipment
-            'vise', 'anvil', 'work bench', 'toolbox', 'tool chest', 'creeper', 'work light'
+            # General Hardware & Fasteners
+            'bolt assortment', 'screw assortment', 'nut assortment', 'washer assortment',
+            'cotter pin', 'clevis pin', 'hitch pin', 'spring pin', 'roll pin',
+            
+            # Safety Equipment
+            'safety glasses', 'work gloves', 'shop gloves', 'hearing protection',
+            'knee pads', 'back support', 'shop apron'
+        ]
+        
+        # Keywords that indicate NON-automotive items (exclusions)
+        self.non_automotive_keywords = [
+            # Home/Kitchen items
+            'kitchen', 'cooking', 'recipe', 'food', 'dining', 'tableware', 'cookware',
+            'coffee', 'tea', 'beverage', 'drink', 'bottle opener', 'can opener',
+            'cutting board', 'knife set', 'silverware', 'dishwasher', 'microwave',
+            
+            # Personal items
+            'clothing', 'shirt', 'pants', 'jacket', 'shoes', 'boots', 'hat', 'cap',
+            'watch', 'jewelry', 'necklace', 'ring', 'wallet', 'purse', 'bag',
+            
+            # Electronics (non-automotive)
+            'phone', 'tablet', 'laptop', 'computer', 'monitor', 'keyboard', 'mouse',
+            'headphones', 'speaker', 'bluetooth', 'usb cable', 'charger', 'adapter',
+            'camera', 'video', 'tv', 'television', 'remote control',
+            
+            # Home improvement
+            'paint', 'brush', 'roller', 'ladder', 'garden', 'lawn', 'plant', 'seed',
+            'fertilizer', 'pesticide', 'sprinkler', 'hose nozzle', 'watering',
+            
+            # Office supplies
+            'paper', 'pen', 'pencil', 'marker', 'notebook', 'binder', 'stapler',
+            'calculator', 'desk', 'chair', 'filing cabinet'
         ]
     
     def _initialize_browser(self):
@@ -139,7 +203,20 @@ class AutoPartsDetector:
                 chrome_options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
                 
                 # Initialize driver
-                service = Service(ChromeDriverManager().install())
+                driver_path = ChromeDriverManager().install()
+                
+                # Fix webdriver-manager bug where it sometimes points to wrong file
+                if driver_path.endswith('THIRD_PARTY_NOTICES.chromedriver'):
+                    import os
+                    driver_dir = os.path.dirname(driver_path)
+                    actual_driver = os.path.join(driver_dir, 'chromedriver')
+                    if os.path.exists(actual_driver):
+                        driver_path = actual_driver
+                        logger.info(f"Fixed driver path from THIRD_PARTY_NOTICES to: {driver_path}")
+                    else:
+                        logger.error(f"Could not find actual chromedriver in {driver_dir}")
+                
+                service = Service(driver_path)
                 self.driver = webdriver.Chrome(service=service, options=chrome_options)
                 
                 # Execute script to hide automation indicators
@@ -208,23 +285,18 @@ class AutoPartsDetector:
                 'ext_retail': row.get('Ext. Retail', 0)
             }
             
-            # Check if automotive first (priority over tools)
-            is_automotive = any(keyword in description for keyword in self.automotive_keywords)
+            # First check for non-automotive exclusions
+            is_non_automotive = any(keyword in description for keyword in self.non_automotive_keywords)
             
-            # Only check for tools if it's not automotive
-            # Also exclude automotive contexts for tool keywords
+            # Check if automotive (but exclude if it's clearly non-automotive)
+            is_automotive = False
+            if not is_non_automotive:
+                is_automotive = any(keyword in description for keyword in self.automotive_keywords)
+            
+            # Only check for tools if it's not automotive and not excluded
             is_tool = False
-            if not is_automotive:
+            if not is_automotive and not is_non_automotive:
                 is_tool = any(keyword in description for keyword in self.tool_keywords)
-                
-                # Special handling: automotive sockets, gauges, compressors should be automotive
-                if is_tool and any(auto_context in description for auto_context in [
-                    'a/c', 'ac ', 'air conditioning', 'temp sender', 'temperature', 
-                    'coolant', 'oil pressure', 'fuel', 'vacuum', 'brake', 'transmission',
-                    'engine', 'exhaust', 'emission', 'sensor', 'electrical', 'wiring'
-                ]):
-                    is_tool = False
-                    is_automotive = True
             
             if is_automotive:
                 categorized['automotive'].append(part_data)
@@ -241,6 +313,15 @@ class AutoPartsDetector:
     def search_rockauto(self, part_number: str, part_description: str = "", full_item_num: str = "") -> Optional[List[str]]:
         """Search RockAuto for a part number using streamlined direct search."""
         try:
+            # Check if we should stop processing (import here to avoid circular imports)
+            try:
+                from backend.main import state
+                if hasattr(state, 'should_stop') and state.should_stop:
+                    logger.info("Stopping RockAuto search due to user request")
+                    return None
+            except:
+                pass  # If we can't import state, continue normally
+                
             # Initialize browser if needed
             if self.driver is None:
                 self._initialize_browser()
@@ -250,8 +331,8 @@ class AutoPartsDetector:
             logger.info(f"Direct part search: {search_url}")
             self.driver.get(search_url)
             
-            # Wait for page to load
-            time.sleep(3)
+            # Wait for page to load (reduced from 3s to 1.5s)
+            time.sleep(1.5)
             current_url = self.driver.current_url
             logger.info(f"Result URL: {current_url}")
             
@@ -294,7 +375,7 @@ class AutoPartsDetector:
                                 part_text = link.text.strip()
                                 logger.info(f"Clicking part link {i+1}: {part_text}")
                                 link.click()
-                                time.sleep(2)
+                                time.sleep(1)  # Reduced from 2s to 1s
                                 
                                 # Check for popup after click
                                 try:
@@ -439,43 +520,12 @@ class AutoPartsDetector:
     
     
     def search_google_fallback(self, part_number: str) -> Optional[List[str]]:
-        """Use web search as fallback to find vehicle makes from search results."""
-        try:
-            makes = set()
-            
-            # Try WebSearch tool if available
-            try:
-                query = f'"{part_number}" advanced auto parts'
-                logger.info(f"WebSearch query: {query}")
-                
-                # Import WebSearch at the top level if available
-                from __main__ import WebSearch
-                results = WebSearch(query=query)
-                
-                logger.info("WebSearch completed successfully")
-                # Process WebSearch results here if the tool worked
-                
-            except ImportError:
-                logger.info("WebSearch tool not available, using manual parsing")
-            except Exception as e:
-                logger.info(f"WebSearch failed: {e}, falling back to manual method")
-            
-            # Manual pattern-based extraction as fallback
-            if not makes:
-                makes.update(self._extract_from_part_context(part_number))
-            
-            if makes:
-                filtered_makes = [make for make in makes if self._is_valid_make(make)]
-                if filtered_makes:
-                    logger.info(f"Web search found makes: {filtered_makes}")
-                    return sorted(filtered_makes)
-            
-            logger.info(f"Web search found no vehicle makes for {part_number}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error in Google search fallback for {part_number}: {e}")
-            return None
+        """
+        DISABLED: Google search fallback was returning unreliable results.
+        Only use RockAuto for confident, accurate results.
+        """
+        logger.info(f"Google fallback disabled for reliability - no results for {part_number}")
+        return None
     
     def _extract_from_part_context(self, part_number: str) -> set:
         """Extract vehicle makes using part number context and pattern matching."""
@@ -672,11 +722,9 @@ class AutoPartsDetector:
             makes = self.search_rockauto(part_number, part['description'], item_num)
             source = 'RockAuto'
             
-            # If RockAuto fails, try Google search pattern matching as immediate fallback
+            # Only use RockAuto - no unreliable fallback methods
             if not makes:
-                logger.info(f"RockAuto failed for {part_number}, trying Google search pattern matching...")
-                makes = self.search_google_fallback(part_number)
-                source = 'Google'
+                logger.info(f"No reliable results found for {part_number}")
             
             # Record results
             part_result = part.copy()
